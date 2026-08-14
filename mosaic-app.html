@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>動画モザイクツール</title>
+<style>
+  :root{
+    --bg:#f4f6f7;
+    --panel:#ffffff;
+    --ink:#1e2a2f;
+    --sub:#5c6b70;
+    --line:#dbe2e4;
+    --accent:#1f8a83;
+    --accent-dark:#166b66;
+    --warn:#e2673f;
+    --select:#e2673f;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",-apple-system,BlinkMacSystemFont,sans-serif;
+    background:var(--bg);
+    color:var(--ink);
+    padding:16px;
+  }
+  h1{
+    font-size:20px;
+    margin:0 0 4px;
+    letter-spacing:.02em;
+  }
+  .lead{
+    color:var(--sub);
+    font-size:13px;
+    margin:0 0 18px;
+    line-height:1.6;
+  }
+  .layout{
+    display:grid;
+    grid-template-columns: minmax(0,1fr) 320px;
+    gap:16px;
+    max-width:1100px;
+    margin:0 auto;
+  }
+  @media (max-width:880px){
+    .layout{grid-template-columns:1fr;}
+  }
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:14px;
+  }
+  .panel + .panel{margin-top:16px;}
+  .dropzone{
+    border:2px dashed var(--line);
+    border-radius:10px;
+    padding:28px 14px;
+    text-align:center;
+    color:var(--sub);
+    font-size:13px;
+    cursor:pointer;
+    background:#fafcfc;
+  }
+  .dropzone:hover{border-color:var(--accent);}
+  .stage-wrap{
+    position:relative;
+    width:100%;
+    background:#0f1416;
+    border-radius:8px;
+    overflow:hidden;
+    touch-action:none;
+  }
+  canvas#stage{
+    display:block;
+    width:100%;
+    height:auto;
+    cursor:crosshair;
+  }
+  .hidden{display:none !important;}
+  .transport{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-top:10px;
+  }
+  .transport button{
+    width:36px;height:36px;
+    border-radius:8px;
+    border:1px solid var(--line);
+    background:#fff;
+    cursor:pointer;
+    font-size:14px;
+  }
+  .transport input[type=range]{flex:1;}
+  .time-label{font-size:12px;color:var(--sub);min-width:88px;text-align:right;}
+  .hint{
+    font-size:12px;
+    color:var(--sub);
+    margin-top:8px;
+    line-height:1.6;
+  }
+  label.field{
+    display:block;
+    font-size:12px;
+    color:var(--sub);
+    margin:10px 0 4px;
+  }
+  input[type=number], select{
+    width:100%;
+    padding:6px 8px;
+    border:1px solid var(--line);
+    border-radius:6px;
+    font-size:13px;
+  }
+  .btn{
+    display:inline-block;
+    padding:9px 14px;
+    border-radius:8px;
+    border:1px solid var(--accent);
+    background:var(--accent);
+    color:#fff;
+    font-size:13px;
+    cursor:pointer;
+    text-align:center;
+  }
+  .btn:hover{background:var(--accent-dark);}
+  .btn.secondary{
+    background:#fff;
+    color:var(--accent);
+  }
+  .btn:disabled{opacity:.45;cursor:not-allowed;}
+  .btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+  .region-list{
+    margin-top:10px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    max-height:340px;
+    overflow-y:auto;
+  }
+  .region-item{
+    border:1px solid var(--line);
+    border-radius:8px;
+    padding:8px 10px;
+    font-size:12px;
+    cursor:pointer;
+  }
+  .region-item.selected{
+    border-color:var(--select);
+    background:#fff4f0;
+  }
+  .region-item .title{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    font-weight:600;
+    margin-bottom:6px;
+  }
+  .region-item .title span.del{
+    color:var(--warn);
+    cursor:pointer;
+    font-weight:400;
+  }
+  .mini-row{display:flex;gap:6px;align-items:center;margin-top:4px;}
+  .mini-row label{font-size:11px;color:var(--sub);width:44px;flex-shrink:0;}
+  .mini-row input{width:100%;padding:3px 5px;font-size:12px;}
+  .mini-btn{
+    font-size:11px;
+    padding:3px 6px;
+    border-radius:5px;
+    border:1px solid var(--line);
+    background:#fff;
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .kf-list{
+    margin-top:6px;
+    padding-top:6px;
+    border-top:1px dashed var(--line);
+  }
+  .kf-list .mini-row span.kf-tag{
+    flex:1;
+    font-size:11px;
+    color:var(--sub);
+  }
+  #status{
+    font-size:12px;
+    margin-top:10px;
+    color:var(--sub);
+    min-height:16px;
+  }
+  #status.busy{color:var(--accent-dark);font-weight:600;}
+  .slider-row{display:flex;align-items:center;gap:8px;}
+  .slider-row input[type=range]{flex:1;}
+  .slider-val{font-size:12px;color:var(--sub);width:34px;text-align:right;}
+</style>
+</head>
+<body>
+
+<h1>動画モザイクツール</h1>
+<p class="lead">動画を読み込んで、隠したい部分を四角で囲むだけ。位置はあとから動かせる・大きさも変えられる・動くものには追跡ポイントで対応できます。</p>
+
+<div class="layout">
+  <div>
+    <div class="panel" id="uploadPanel">
+      <div class="dropzone" id="dropzone">
+        動画ファイルをここにドラッグ、またはタップして選択<br>
+        <input type="file" id="fileInput" accept="video/*" class="hidden">
+      </div>
+    </div>
+
+    <div class="panel hidden" id="stagePanel">
+      <div class="stage-wrap">
+        <canvas id="stage"></canvas>
+      </div>
+      <div class="transport">
+        <button id="playBtn">▶</button>
+        <input type="range" id="seek" min="0" max="1000" value="0" step="1">
+        <span class="time-label" id="timeLabel">0:00 / 0:00</span>
+      </div>
+      <div class="btn-row">
+        <button class="btn secondary" id="addKeyframeBtn" disabled>選択中の枠:今の位置に追跡ポイントを追加</button>
+        <button class="btn" id="autoTrackBtn" disabled>選択中の枠を自動追尾(現在位置→終了まで)</button>
+      </div>
+      <div class="mini-row">
+        <label style="width:70px;">追跡間隔</label>
+        <select id="trackInterval">
+          <option value="0.3">粗い(速い)</option>
+          <option value="0.15" selected>普通</option>
+          <option value="0.08">細かい(遅い・高精度)</option>
+        </select>
+      </div>
+      <div class="mini-row">
+        <label style="width:70px;">探索範囲</label>
+        <select id="trackRadius">
+          <option value="0.4">狭い</option>
+          <option value="0.6" selected>普通</option>
+          <option value="1.2">広い(激しい動き用)</option>
+        </select>
+      </div>
+      <p class="hint">
+        ① ドラッグで新しい範囲を四角く囲む → 枠を選択すると四隅にハンドルが出るので大きさを変更可。<br>
+        ② 動画を少し進めて、枠を被写体の新しい位置までドラッグ/リサイズすると自動で追跡ポイントが記録されます。<br>
+        ③「自動追尾」を押すと、直前の動きから次の位置を予測しつつ以降のフレームを自動計算します。動きが激しいシーンは「間隔=細かい」「探索範囲=広い」に変更すると追いつきやすくなります。見失った場合はその時刻で自動停止するので、手動でドラッグして直してから再度自動追尾すれば続きから再開できます。
+      </p>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel hidden" id="controlPanel">
+      <label class="field">モザイクの粗さ</label>
+      <div class="slider-row">
+        <input type="range" id="blockSize" min="4" max="60" value="18">
+        <span class="slider-val" id="blockSizeVal">18</span>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn secondary" id="startAtCurrent">新規範囲を今の位置から追加</button>
+      </div>
+
+      <div class="region-list" id="regionList"></div>
+
+      <label class="field">保存するファイル名</label>
+      <input type="text" id="outputName" value="mosaic_output">
+
+      <div class="btn-row">
+        <button class="btn" id="exportBtn">モザイクをかけて書き出す</button>
+      </div>
+      <div id="status"></div>
+      <p class="hint">書き出しは動画の長さと同じくらいの時間がかかります(実時間で再生しながら処理するため)。Chromeでの利用を推奨します。音声はそのまま引き継がれます。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const fileInput = document.getElementById('fileInput');
+  const dropzone = document.getElementById('dropzone');
+  const uploadPanel = document.getElementById('uploadPanel');
+  const stagePanel = document.getElementById('stagePanel');
+  const controlPanel = document.getElementById('controlPanel');
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d');
+  const playBtn = document.getElementById('playBtn');
+  const seek = document.getElementById('seek');
+  const timeLabel = document.getElementById('timeLabel');
+  const blockSizeInput = document.getElementById('blockSize');
+  const blockSizeVal = document.getElementById('blockSizeVal');
+  const regionList = document.getElementById('regionList');
+  const startAtCurrentBtn = document.getElementById('startAtCurrent');
+  const addKeyframeBtn = document.getElementById('addKeyframeBtn');
+  const autoTrackBtn = document.getElementById('autoTrackBtn');
+  const trackIntervalSel = document.getElementById('trackInterval');
+  const trackRadiusSel = document.getElementById('trackRadius');
+  const exportBtn = document.getElementById('exportBtn');
+  const outputNameInput = document.getElementById('outputName');
+  const statusEl = document.getElementById('status');
+
+  const video = document.createElement('video');
+  video.playsInline = true;
+  video.style.position = 'fixed';
+  video.style.left = '-99999px';
+  document.body.appendChild(video);
+
+  let regions = [];
+  let selectedIndex = -1;
+  let drawing = null;
+  let dragMode = null; // 'new' | 'move' | 'resize'
+  let dragHandle = null;
+  let dragStart = null;
+  let activeKeyframe = null;
+  let editMode = true;
+  let seeking = false;
+  let idCounter = 1;
+  let tracking = false;
+  const TEMPLATE_GRID = 14;
+
+  fileInput.addEventListener('change', e => {
+    if (e.target.files && e.target.files[0]) loadFile(e.target.files[0]);
+  });
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); });
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+  });
+
+  function loadFile(file){
+    const url = URL.createObjectURL(file);
+    video.src = url;
+    video.onloadedmetadata = () => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      seek.max = Math.floor(video.duration * 100);
+      uploadPanel.classList.add('hidden');
+      stagePanel.classList.remove('hidden');
+      controlPanel.classList.remove('hidden');
+      regions = [];
+      selectedIndex = -1;
+      renderRegionList();
+      updateTimeLabel();
+      requestAnimationFrame(renderFrame);
+    };
+  }
+
+  // --- playback controls ---
+  playBtn.addEventListener('click', () => {
+    if (video.paused){ video.play(); playBtn.textContent='⏸'; }
+    else { video.pause(); playBtn.textContent='▶'; }
+  });
+  video.addEventListener('ended', () => { playBtn.textContent='▶'; });
+  video.addEventListener('timeupdate', () => {
+    if (!seeking) seek.value = Math.floor(video.currentTime * 100);
+    updateTimeLabel();
+  });
+  seek.addEventListener('input', () => {
+    seeking = true;
+    video.currentTime = seek.value / 100;
+    updateTimeLabel();
+  });
+  seek.addEventListener('change', () => { seeking = false; });
+
+  function fmt(t){
+    if (!isFinite(t)) t = 0;
+    const m = Math.floor(t/60), s = Math.floor(t%60);
+    return m + ':' + String(s).padStart(2,'0');
+  }
+  function updateTimeLabel(){
+    timeLabel.textContent = fmt(video.currentTime) + ' / ' + fmt(video.duration || 0);
+  }
+
+  blockSizeInput.addEventListener('input', () => {
+    blockSizeVal.textContent = blockSizeInput.value;
+  });
+
+  // --- keyframe / interpolation helpers ---
+  function getRectAtTime(region, t){
+    const kfs = region.keyframes;
+    if (!kfs || kfs.length === 0) return null;
+    if (kfs.length === 1) return kfs[0];
+    if (t <= kfs[0].t) return kfs[0];
+    if (t >= kfs[kfs.length-1].t) return kfs[kfs.length-1];
+    for (let i=0;i<kfs.length-1;i++){
+      const a = kfs[i], b = kfs[i+1];
+      if (t >= a.t && t <= b.t){
+        const f = (t - a.t) / ((b.t - a.t) || 1);
+        return {
+          x: a.x + (b.x-a.x)*f,
+          y: a.y + (b.y-a.y)*f,
+          w: a.w + (b.w-a.w)*f,
+          h: a.h + (b.h-a.h)*f
+        };
+      }
+    }
+    return kfs[kfs.length-1];
+  }
+  function getOrCreateKeyframeAtCurrentTime(region){
+    const t = video.currentTime;
+    const eps = 0.08;
+    let kf = region.keyframes.find(k => Math.abs(k.t - t) <= eps);
+    if (kf) return kf;
+    const rect = getRectAtTime(region, t) || {x:0,y:0,w:60,h:60};
+    kf = { t, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+    region.keyframes.push(kf);
+    region.keyframes.sort((a,b)=>a.t-b.t);
+    return kf;
+  }
+
+  // --- automatic tracking (block matching, no external models needed) ---
+  function seekTo(t){
+    return new Promise(res => {
+      video.currentTime = Math.max(0, Math.min(t, video.duration));
+      video.onseeked = () => res();
+    });
+  }
+  function drawRawFrame(){
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  }
+  function getGrayBuffer(x,y,w,h){
+    const sx = Math.max(0, Math.floor(x)), sy = Math.max(0, Math.floor(y));
+    const ex = Math.min(canvas.width, Math.ceil(x+w)), ey = Math.min(canvas.height, Math.ceil(y+h));
+    const bw = Math.max(1, ex-sx), bh = Math.max(1, ey-sy);
+    const data = ctx.getImageData(sx, sy, bw, bh).data;
+    const gray = new Float32Array(bw*bh);
+    for (let i=0;i<bw*bh;i++){
+      const o = i*4;
+      gray[i] = 0.299*data[o] + 0.587*data[o+1] + 0.114*data[o+2];
+    }
+    return { gray, bx:sx, by:sy, bw, bh };
+  }
+  function sampleGridFromBuffer(buf, localX, localY, w, h, gridN){
+    const { gray, bw, bh } = buf;
+    const out = new Float32Array(gridN*gridN);
+    let idx = 0;
+    for (let gy=0; gy<gridN; gy++){
+      for (let gx=0; gx<gridN; gx++){
+        let px = Math.floor(localX + (gx+0.5)/gridN*w);
+        let py = Math.floor(localY + (gy+0.5)/gridN*h);
+        px = Math.max(0, Math.min(bw-1, px));
+        py = Math.max(0, Math.min(bh-1, py));
+        out[idx++] = gray[py*bw+px];
+      }
+    }
+    return out;
+  }
+  function ssd(a,b){
+    let s = 0;
+    for (let i=0;i<a.length;i++){ const d = a[i]-b[i]; s += d*d; }
+    return s;
+  }
+  function findBestMatch(template, curX, curY, w, h, searchRadius){
+    const pad = 4;
+    const buf = getGrayBuffer(curX-searchRadius-pad, curY-searchRadius-pad, w+2*(searchRadius+pad), h+2*(searchRadius+pad));
+    const stride = Math.max(1, Math.round(searchRadius/15));
+    const maxX = canvas.width - w, maxY = canvas.height - h;
+    let bestScore = Infinity, bestX = curX, bestY = curY;
+    for (let dy=-searchRadius; dy<=searchRadius; dy+=stride){
+      for (let dx=-searchRadius; dx<=searchRadius; dx+=stride){
+        const candX = clamp(curX+dx, 0, maxX);
+        const candY = clamp(curY+dy, 0, maxY);
+        const sample = sampleGridFromBuffer(buf, candX-buf.bx, candY-buf.by, w, h, TEMPLATE_GRID);
+        const score = ssd(template, sample);
+        if (score < bestScore){ bestScore = score; bestX = candX; bestY = candY; }
+      }
+    }
+    return { x:bestX, y:bestY, score:bestScore };
+  }
+  async function autoTrack(regionIndex){
+    const region = regions[regionIndex];
+    if (!region) return;
+    const startT = video.currentTime;
+    let rect = getRectAtTime(region, startT);
+    if (!rect){ statusEl.textContent = 'まず追跡ポイントを1つ作成してください。'; return; }
+    const endT = Math.min(region.end, video.duration);
+    if (endT - startT < 0.05){ statusEl.textContent = '終了時刻が現在位置より後になるようにしてください。'; return; }
+
+    const stepInterval = parseFloat(trackIntervalSel.value) || 0.15;
+    const radiusMul = parseFloat(trackRadiusSel.value) || 0.6;
+    const LOST_THRESHOLD = 2600; // サンプル1点あたりの平均二乗誤差の目安(経験的な閾値)
+
+    tracking = true;
+    editMode = false;
+    video.pause();
+    autoTrackBtn.disabled = true;
+    addKeyframeBtn.disabled = true;
+    exportBtn.disabled = true;
+    statusEl.className = 'busy';
+
+    const w = rect.w, h = rect.h;
+    await seekTo(startT);
+    drawRawFrame();
+    const template = sampleGridFromBuffer(getGrayBuffer(rect.x, rect.y, w, h), 0, 0, w, h, TEMPLATE_GRID);
+
+    let curX = rect.x, curY = rect.y;
+    let history = [{ x:curX, y:curY }];
+    let lostAt = null;
+    let t = startT + stepInterval;
+    while (t <= endT + 1e-6){
+      await seekTo(t);
+      drawRawFrame();
+
+      // 直前2点の動きから次の位置を予測してから、その周りを探索する
+      let predX = curX, predY = curY;
+      if (history.length >= 2){
+        const a = history[history.length-2], b = history[history.length-1];
+        predX = clamp(b.x + (b.x-a.x), 0, canvas.width - w);
+        predY = clamp(b.y + (b.y-a.y), 0, canvas.height - h);
+      }
+
+      const searchRadius = Math.max(canvas.width*0.03, Math.max(w,h)*radiusMul, 18);
+      const best = findBestMatch(template, predX, predY, w, h, searchRadius);
+      const normScore = best.score / (TEMPLATE_GRID*TEMPLATE_GRID);
+      if (normScore > LOST_THRESHOLD){
+        lostAt = t;
+        break;
+      }
+      curX = best.x; curY = best.y;
+      history.push({ x:curX, y:curY });
+      if (history.length > 2) history.shift();
+
+      let kf = region.keyframes.find(k => Math.abs(k.t - t) <= 0.02);
+      if (kf){ kf.x = curX; kf.y = curY; }
+      else { region.keyframes.push({ t, x:curX, y:curY, w, h }); }
+      statusEl.textContent = `自動追尾中… ${fmt(t)} / ${fmt(endT)}`;
+      t += stepInterval;
+    }
+    region.keyframes.sort((a,b) => a.t-b.t);
+    await seekTo(startT);
+
+    tracking = false;
+    editMode = true;
+    autoTrackBtn.disabled = selectedIndex < 0;
+    addKeyframeBtn.disabled = selectedIndex < 0;
+    exportBtn.disabled = false;
+    statusEl.className = '';
+    if (lostAt !== null){
+      statusEl.textContent = `${fmt(lostAt)} 付近で見失った可能性があります。その時刻まで移動して枠を手動で合わせ、続きをもう一度「自動追尾」してください。`;
+    } else {
+      statusEl.textContent = '自動追尾が完了しました。ズレている箇所があれば手動でドラッグして直せます。';
+    }
+    renderRegionList();
+    requestAnimationFrame(renderFrame);
+  }
+
+  // --- render loop ---
+  function applyMosaic(x,y,w,h,block){
+    if (w<=0||h<=0) return;
+    const sw = Math.max(1, Math.floor(w/block));
+    const sh = Math.max(1, Math.floor(h/block));
+    const tmp = document.createElement('canvas');
+    tmp.width = sw; tmp.height = sh;
+    const tctx = tmp.getContext('2d');
+    tctx.drawImage(canvas, x, y, w, h, 0, 0, sw, sh);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tmp, 0, 0, sw, sh, x, y, w, h);
+    ctx.imageSmoothingEnabled = true;
+  }
+  function handleSize(){ return Math.max(16, canvas.width*0.015); }
+  function drawHandles(rect){
+    const hs = handleSize();
+    const pts = [[rect.x,rect.y],[rect.x+rect.w,rect.y],[rect.x,rect.y+rect.h],[rect.x+rect.w,rect.y+rect.h]];
+    ctx.fillStyle = '#e2673f';
+    pts.forEach(p => {
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], hs*0.35, 0, Math.PI*2);
+      ctx.fill();
+    });
+  }
+
+  function renderFrame(){
+    if (tracking){ requestAnimationFrame(renderFrame); return; }
+    if (video.readyState >= 2){
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const block = parseInt(blockSizeInput.value, 10);
+      regions.forEach(r => {
+        if (video.currentTime >= r.start && video.currentTime <= r.end){
+          const rect = getRectAtTime(r, video.currentTime);
+          if (rect) applyMosaic(rect.x, rect.y, rect.w, rect.h, block);
+        }
+      });
+      if (editMode){
+        regions.forEach((r, i) => {
+          const rect = getRectAtTime(r, video.currentTime);
+          if (!rect) return;
+          ctx.lineWidth = Math.max(2, canvas.width/400);
+          ctx.strokeStyle = (i === selectedIndex) ? '#e2673f' : 'rgba(255,255,255,.85)';
+          ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+          if (i === selectedIndex) drawHandles(rect);
+        });
+        if (drawing){
+          ctx.setLineDash([8,6]);
+          ctx.strokeStyle = '#3ddc97';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(drawing.x, drawing.y, drawing.w, drawing.h);
+          ctx.setLineDash([]);
+        }
+      }
+    }
+    requestAnimationFrame(renderFrame);
+  }
+
+  // --- pointer interaction on canvas ---
+  function canvasPos(evt){
+    const rect = canvas.getBoundingClientRect();
+    const cx = (evt.touches ? evt.touches[0].clientX : evt.clientX) - rect.left;
+    const cy = (evt.touches ? evt.touches[0].clientY : evt.clientY) - rect.top;
+    return {
+      x: cx * (canvas.width / rect.width),
+      y: cy * (canvas.height / rect.height)
+    };
+  }
+  function hitHandle(pos, rect){
+    const hs = handleSize();
+    const corners = {
+      nw:{x:rect.x,y:rect.y}, ne:{x:rect.x+rect.w,y:rect.y},
+      sw:{x:rect.x,y:rect.y+rect.h}, se:{x:rect.x+rect.w,y:rect.y+rect.h}
+    };
+    for (const key in corners){
+      const c = corners[key];
+      if (Math.abs(pos.x-c.x) <= hs && Math.abs(pos.y-c.y) <= hs) return key;
+    }
+    return null;
+  }
+  function hitRegionAtCurrent(pos){
+    for (let i = regions.length - 1; i >= 0; i--){
+      const rect = getRectAtTime(regions[i], video.currentTime);
+      if (!rect) continue;
+      if (pos.x >= rect.x && pos.x <= rect.x+rect.w && pos.y >= rect.y && pos.y <= rect.y+rect.h) return i;
+    }
+    return -1;
+  }
+  function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+
+  function onDown(evt){
+    evt.preventDefault();
+    const pos = canvasPos(evt);
+    if (selectedIndex >= 0){
+      const rect = getRectAtTime(regions[selectedIndex], video.currentTime);
+      if (rect){
+        const h = hitHandle(pos, rect);
+        if (h){
+          dragMode = 'resize';
+          dragHandle = h;
+          activeKeyframe = getOrCreateKeyframeAtCurrentTime(regions[selectedIndex]);
+          dragStart = { x: pos.x, y: pos.y, orig: {x:activeKeyframe.x,y:activeKeyframe.y,w:activeKeyframe.w,h:activeKeyframe.h} };
+          return;
+        }
+      }
+    }
+    const hit = hitRegionAtCurrent(pos);
+    if (hit >= 0){
+      selectedIndex = hit;
+      dragMode = 'move';
+      activeKeyframe = getOrCreateKeyframeAtCurrentTime(regions[hit]);
+      dragStart = { x: pos.x, y: pos.y, orig: {x:activeKeyframe.x,y:activeKeyframe.y,w:activeKeyframe.w,h:activeKeyframe.h} };
+      renderRegionList();
+      updateAddKeyframeBtn();
+    } else {
+      dragMode = 'new';
+      drawing = { x: pos.x, y: pos.y, w: 0, h: 0 };
+      dragStart = pos;
+      selectedIndex = -1;
+      renderRegionList();
+      updateAddKeyframeBtn();
+    }
+  }
+  function resizeByHandle(kf, orig, handle, dx, dy){
+    let x=orig.x, y=orig.y, w=orig.w, h=orig.h;
+    if (handle.includes('w')){ x = orig.x+dx; w = orig.w-dx; }
+    if (handle.includes('e')){ w = orig.w+dx; }
+    if (handle.includes('n')){ y = orig.y+dy; h = orig.h-dy; }
+    if (handle.includes('s')){ h = orig.h+dy; }
+    if (w < 8){ if (handle.includes('w')) x = orig.x+orig.w-8; w = 8; }
+    if (h < 8){ if (handle.includes('n')) y = orig.y+orig.h-8; h = 8; }
+    x = clamp(x, 0, canvas.width - w);
+    y = clamp(y, 0, canvas.height - h);
+    kf.x = x; kf.y = y; kf.w = w; kf.h = h;
+  }
+  function onMove(evt){
+    if (!dragMode) return;
+    evt.preventDefault();
+    const pos = canvasPos(evt);
+    if (dragMode === 'new'){
+      drawing.w = pos.x - dragStart.x;
+      drawing.h = pos.y - dragStart.y;
+    } else if (dragMode === 'move'){
+      const dx = pos.x - dragStart.x, dy = pos.y - dragStart.y;
+      activeKeyframe.x = clamp(dragStart.orig.x + dx, 0, canvas.width - activeKeyframe.w);
+      activeKeyframe.y = clamp(dragStart.orig.y + dy, 0, canvas.height - activeKeyframe.h);
+    } else if (dragMode === 'resize'){
+      const dx = pos.x - dragStart.x, dy = pos.y - dragStart.y;
+      resizeByHandle(activeKeyframe, dragStart.orig, dragHandle, dx, dy);
+    }
+  }
+  function onUp(evt){
+    if (dragMode === 'new' && drawing){
+      const r = normalizeRect(drawing);
+      if (r.w > 6 && r.h > 6){
+        regions.push({
+          id: idCounter++,
+          start: 0, end: video.duration,
+          keyframes: [{ t: video.currentTime, x:r.x, y:r.y, w:r.w, h:r.h }]
+        });
+        selectedIndex = regions.length - 1;
+        renderRegionList();
+      }
+      drawing = null;
+    }
+    if (dragMode === 'move' || dragMode === 'resize') renderRegionList();
+    dragMode = null;
+    dragStart = null;
+    activeKeyframe = null;
+    updateAddKeyframeBtn();
+  }
+  function normalizeRect(r){
+    const x = r.w < 0 ? r.x + r.w : r.x;
+    const y = r.h < 0 ? r.y + r.h : r.y;
+    return { x, y, w: Math.abs(r.w), h: Math.abs(r.h) };
+  }
+
+  canvas.addEventListener('mousedown', onDown);
+  canvas.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  canvas.addEventListener('touchstart', onDown, {passive:false});
+  canvas.addEventListener('touchmove', onMove, {passive:false});
+  canvas.addEventListener('touchend', onUp);
+
+  startAtCurrentBtn.addEventListener('click', () => {
+    const w = Math.round(canvas.width*0.2), h = Math.round(canvas.height*0.2);
+    regions.push({
+      id: idCounter++,
+      start: video.currentTime, end: video.duration,
+      keyframes: [{ t: video.currentTime, x: Math.round((canvas.width-w)/2), y: Math.round((canvas.height-h)/2), w, h }]
+    });
+    selectedIndex = regions.length - 1;
+    renderRegionList();
+    updateAddKeyframeBtn();
+  });
+
+  addKeyframeBtn.addEventListener('click', () => {
+    if (selectedIndex < 0) return;
+    getOrCreateKeyframeAtCurrentTime(regions[selectedIndex]);
+    renderRegionList();
+  });
+  autoTrackBtn.addEventListener('click', () => {
+    if (selectedIndex < 0 || tracking) return;
+    autoTrack(selectedIndex);
+  });
+  function updateAddKeyframeBtn(){
+    addKeyframeBtn.disabled = selectedIndex < 0;
+    autoTrackBtn.disabled = selectedIndex < 0;
+  }
+
+  // --- region list UI ---
+  function renderRegionList(){
+    regionList.innerHTML = '';
+    regions.forEach((r, i) => {
+      const item = document.createElement('div');
+      item.className = 'region-item' + (i === selectedIndex ? ' selected' : '');
+      const kfRows = r.keyframes.map((k, ki) => `
+        <div class="mini-row">
+          <label>t=${k.t.toFixed(2)}s</label>
+          <span class="kf-tag">追跡ポイント ${ki+1}</span>
+          <button class="mini-btn" data-kfdel="${ki}">削除</button>
+        </div>
+      `).join('');
+      item.innerHTML = `
+        <div class="title"><span>範囲 ${i+1}(ポイント${r.keyframes.length}件)</span><span class="del">範囲を削除</span></div>
+        <div class="mini-row">
+          <label>開始</label><input type="number" step="0.1" min="0" value="${r.start.toFixed(1)}" data-k="start">
+          <button class="mini-btn" data-act="setStart">今の位置</button>
+        </div>
+        <div class="mini-row">
+          <label>終了</label><input type="number" step="0.1" min="0" value="${r.end.toFixed(1)}" data-k="end">
+          <button class="mini-btn" data-act="setEnd">今の位置</button>
+        </div>
+        <div class="kf-list">${kfRows}</div>
+      `;
+      item.addEventListener('click', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.dataset.act || e.target.dataset.kfdel) return;
+        selectedIndex = i;
+        renderRegionList();
+        updateAddKeyframeBtn();
+      });
+      item.querySelector('.del').addEventListener('click', (e) => {
+        e.stopPropagation();
+        regions.splice(i,1);
+        if (selectedIndex === i) selectedIndex = -1;
+        renderRegionList();
+        updateAddKeyframeBtn();
+      });
+      item.querySelectorAll('input').forEach(inp => {
+        inp.addEventListener('change', () => {
+          const k = inp.dataset.k;
+          r[k] = parseFloat(inp.value) || 0;
+        });
+      });
+      item.querySelector('[data-act="setStart"]').addEventListener('click', (e) => {
+        e.stopPropagation();
+        r.start = video.currentTime;
+        renderRegionList();
+      });
+      item.querySelector('[data-act="setEnd"]').addEventListener('click', (e) => {
+        e.stopPropagation();
+        r.end = video.currentTime;
+        renderRegionList();
+      });
+      item.querySelectorAll('[data-kfdel]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const ki = parseInt(btn.dataset.kfdel, 10);
+          if (r.keyframes.length > 1){
+            r.keyframes.splice(ki, 1);
+            renderRegionList();
+          } else {
+            statusEl.textContent = '追跡ポイントは最低1つ必要です。';
+          }
+        });
+      });
+      regionList.appendChild(item);
+    });
+  }
+
+  // --- export ---
+  exportBtn.addEventListener('click', async () => {
+    if (regions.length === 0){
+      statusEl.textContent = 'モザイク範囲を1つ以上追加してください。';
+      return;
+    }
+    if (!canvas.captureStream){
+      statusEl.textContent = 'このブラウザは書き出しに対応していません。Chromeでお試しください。';
+      return;
+    }
+    exportBtn.disabled = true;
+    statusEl.className = 'busy';
+
+    const outStream = new MediaStream();
+    const canvasStream = canvas.captureStream(30);
+    outStream.addTrack(canvasStream.getVideoTracks()[0]);
+
+    try {
+      const srcStream = video.captureStream ? video.captureStream() : video.mozCaptureStream();
+      srcStream.getAudioTracks().forEach(t => outStream.addTrack(t));
+    } catch(e){ /* 音声が取得できない場合は無音で書き出し */ }
+
+    let mimeType = 'video/webm;codecs=vp9,opus';
+    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm;codecs=vp8,opus';
+    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
+    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/mp4';
+
+    const recorder = new MediaRecorder(outStream, { mimeType });
+    const chunks = [];
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+
+    const wasEditMode = editMode;
+    editMode = false;
+    video.pause();
+    video.currentTime = 0;
+    await new Promise(res => { video.onseeked = res; });
+
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+      let name = (outputNameInput.value || 'mosaic_output').trim();
+      name = name.replace(/[\\/:*?"<>|]/g, '_').replace(/\.[a-zA-Z0-9]{1,4}$/, '');
+      if (!name) name = 'mosaic_output';
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name + '.' + ext;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      statusEl.className = '';
+      statusEl.textContent = '書き出し完了。ダウンロードが始まります。';
+      exportBtn.disabled = false;
+      editMode = wasEditMode;
+    };
+
+    recorder.start();
+    video.play();
+
+    const timer = setInterval(() => {
+      statusEl.textContent = `書き出し中… ${fmt(video.currentTime)} / ${fmt(video.duration)}`;
+    }, 300);
+
+    video.onended = () => {
+      clearInterval(timer);
+      recorder.stop();
+    };
+  });
+
+})();
+</script>
+</body>
+</html>
