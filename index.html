@@ -228,6 +228,7 @@
       <div class="btn-row">
         <button class="btn secondary" id="addKeyframeBtn" disabled>選択中の枠:今の位置に追跡ポイントを追加</button>
         <button class="btn" id="autoTrackBtn" disabled>選択中の枠を自動追尾(現在位置→終了まで)</button>
+        <button class="btn" id="faceTrackBtn" disabled>顔だけを自動追尾(AI・現在位置→終了まで)</button>
       </div>
       <div class="mini-row">
         <label style="width:70px;">追跡間隔</label>
@@ -248,7 +249,8 @@
       <p class="hint">
         ① ドラッグで新しい範囲を四角く囲む → 枠を選択すると四隅にハンドルが出るので大きさを変更可。<br>
         ② 動画を少し進めて、枠を被写体の新しい位置までドラッグ/リサイズすると自動で追跡ポイントが記録されます。<br>
-        ③「自動追尾」を押すと、直前の動きから次の位置を予測しつつ以降のフレームを自動計算します。動きが激しいシーンは「間隔=細かい」「探索範囲=広い」に変更すると追いつきやすくなります。見失った場合はその時刻で自動停止するので、手動でドラッグして直してから再度自動追尾すれば続きから再開できます。
+        ③「自動追尾」は直前の動きから次の位置を予測しつつ以降のフレームを計算します(顔以外の物体・風景にも使えます)。動きが激しいシーンは「間隔=細かい」「探索範囲=広い」に変更すると追いつきやすくなります。<br>
+        ④「顔だけを自動追尾」は画面全体から毎フレーム顔を検出し直す方式です。動きの速さに影響されにくい代わりに、顔専用・初回はAIモデルの読み込みが必要です(数秒〜数十秒、通信環境によります)。見失った場合はその時刻で自動停止するので、手動で直してから再開できます。
       </p>
     </div>
   </div>
@@ -297,6 +299,7 @@
   const startAtCurrentBtn = document.getElementById('startAtCurrent');
   const addKeyframeBtn = document.getElementById('addKeyframeBtn');
   const autoTrackBtn = document.getElementById('autoTrackBtn');
+  const faceTrackBtn = document.getElementById('faceTrackBtn');
   const trackIntervalSel = document.getElementById('trackInterval');
   const trackRadiusSel = document.getElementById('trackRadius');
   const exportBtn = document.getElementById('exportBtn');
@@ -549,6 +552,129 @@
     requestAnimationFrame(renderFrame);
   }
 
+  // --- face-detection based tracking (AI, redetects every frame — robust to fast motion) ---
+  let faceApiReady = null; // Promise
+  function loadFaceApi(){
+    if (faceApiReady) return faceApiReady;
+    faceApiReady = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
+      script.onload = async () => {
+        try {
+          await faceapi.nets.tinyFaceDetector.loadFromUri('https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights');
+          resolve();
+        } catch (e){ reject(e); }
+      };
+      script.onerror = () => reject(new Error('script load failed'));
+      document.head.appendChild(script);
+    });
+    return faceApiReady;
+  }
+  function dist(ax,ay,bx,by){ const dx=ax-bx, dy=ay-by; return Math.sqrt(dx*dx+dy*dy); }
+  async function autoTrackFace(regionIndex){
+    const region = regions[regionIndex];
+    if (!region) return;
+    const startT = video.currentTime;
+    let rect = getRectAtTime(region, startT);
+    if (!rect){ statusEl.textContent = 'まず追跡ポイントを1つ作成してください。'; return; }
+    const endT = Math.min(region.end, video.duration);
+    if (endT - startT < 0.05){ statusEl.textContent = '終了時刻が現在位置より後になるようにしてください。'; return; }
+
+    tracking = true;
+    editMode = false;
+    video.pause();
+    autoTrackBtn.disabled = true;
+    faceTrackBtn.disabled = true;
+    addKeyframeBtn.disabled = true;
+    exportBtn.disabled = true;
+    statusEl.className = 'busy';
+    statusEl.textContent = '顔検出モデルを読み込み中…(初回のみ)';
+
+    try {
+      await loadFaceApi();
+    } catch (e){
+      tracking = false;
+      editMode = true;
+      autoTrackBtn.disabled = selectedIndex < 0;
+      faceTrackBtn.disabled = selectedIndex < 0;
+      addKeyframeBtn.disabled = selectedIndex < 0;
+      exportBtn.disabled = false;
+      statusEl.className = '';
+      statusEl.textContent = '顔検出モデルの読み込みに失敗しました。通信環境を確認するか、「自動追尾」(AIなし)をお試しください。';
+      requestAnimationFrame(renderFrame);
+      return;
+    }
+
+    const stepInterval = parseFloat(trackIntervalSel.value) || 0.15;
+    const w = rect.w, h = rect.h;
+    let curX = rect.x + w/2, curY = rect.y + h/2; // 中心座標で追跡
+    let curW = w, curH = h;
+    let missCount = 0;
+    const MAX_MISS = 10;
+    let lostAt = null;
+    let t = startT;
+
+    const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+
+    while (t <= endT + 1e-6){
+      await seekTo(t);
+      drawRawFrame();
+      let detections = [];
+      try {
+        detections = await faceapi.detectAllFaces(canvas, opts);
+      } catch(e){ detections = []; }
+
+      if (detections.length > 0){
+        let best = null, bestD = Infinity;
+        detections.forEach(d => {
+          const b = d.box;
+          const ccx = b.x + b.width/2, ccy = b.y + b.height/2;
+          const dd = dist(ccx, ccy, curX, curY);
+          if (dd < bestD){ bestD = dd; best = b; }
+        });
+        missCount = 0;
+        // 検出枠は顔の輪郭ぴったりになりがちなので、少し余裕を持たせる
+        const padX = best.width * 0.18, padY = best.height * 0.28;
+        let nx = best.x - padX, ny = best.y - padY*1.2;
+        let nw = best.width + padX*2, nh = best.height + padY*2;
+        nx = clamp(nx, 0, canvas.width - nw);
+        ny = clamp(ny, 0, canvas.height - nh);
+        curX = nx + nw/2; curY = ny + nh/2;
+        curW = nw; curH = nh;
+
+        let kf = region.keyframes.find(k => Math.abs(k.t - t) <= 0.02);
+        if (kf){ kf.x=nx; kf.y=ny; kf.w=nw; kf.h=nh; }
+        else { region.keyframes.push({ t, x:nx, y:ny, w:nw, h:nh }); }
+        statusEl.textContent = `顔を検出して追尾中… ${fmt(t)} / ${fmt(endT)}`;
+      } else {
+        missCount++;
+        statusEl.textContent = `顔が見つかりません… ${fmt(t)} / ${fmt(endT)}`;
+        if (missCount >= MAX_MISS){
+          lostAt = t;
+          break;
+        }
+      }
+      t += stepInterval;
+    }
+    region.keyframes.sort((a,b) => a.t-b.t);
+    await seekTo(startT);
+
+    tracking = false;
+    editMode = true;
+    autoTrackBtn.disabled = selectedIndex < 0;
+    faceTrackBtn.disabled = selectedIndex < 0;
+    addKeyframeBtn.disabled = selectedIndex < 0;
+    exportBtn.disabled = false;
+    statusEl.className = '';
+    if (lostAt !== null){
+      statusEl.textContent = `${fmt(lostAt)} 付近で顔を見失いました(横向き・手で隠れたなど)。その時刻まで移動して枠を手動で合わせ、続きをもう一度「顔だけを自動追尾」してください。`;
+    } else {
+      statusEl.textContent = '顔の自動追尾が完了しました。ズレている箇所があれば手動でドラッグして直せます。';
+    }
+    renderRegionList();
+    requestAnimationFrame(renderFrame);
+  }
+
   // --- render loop ---
   function applyMosaic(x,y,w,h,block){
     if (w<=0||h<=0) return;
@@ -753,9 +879,14 @@
     if (selectedIndex < 0 || tracking) return;
     autoTrack(selectedIndex);
   });
+  faceTrackBtn.addEventListener('click', () => {
+    if (selectedIndex < 0 || tracking) return;
+    autoTrackFace(selectedIndex);
+  });
   function updateAddKeyframeBtn(){
     addKeyframeBtn.disabled = selectedIndex < 0;
     autoTrackBtn.disabled = selectedIndex < 0;
+    faceTrackBtn.disabled = selectedIndex < 0;
   }
 
   // --- region list UI ---
