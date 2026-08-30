@@ -609,29 +609,43 @@
     const w = rect.w, h = rect.h;
     let curX = rect.x + w/2, curY = rect.y + h/2; // 中心座標で追跡
     let curW = w, curH = h;
+    let history = [{ x:curX, y:curY }]; // 速度予測用
     let missCount = 0;
-    const MAX_MISS = 10;
+    const MAX_MISS = 14;
     let lostAt = null;
     let t = startT;
 
-    const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 });
+    // 横顔・斜め顔も拾いやすいよう、入力解像度を上げて閾値を緩める(動画処理なので多少遅くても許容)
+    const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.35 });
 
     while (t <= endT + 1e-6){
       await seekTo(t);
       drawRawFrame();
+
+      // 直前2点の動きから、見失った間の位置を予測しておく
+      let predX = curX, predY = curY;
+      if (history.length >= 2){
+        const a = history[history.length-2], b = history[history.length-1];
+        predX = clamp(b.x + (b.x-a.x), 0, canvas.width);
+        predY = clamp(b.y + (b.y-a.y), 0, canvas.height);
+      }
+
       let detections = [];
       try {
         detections = await faceapi.detectAllFaces(canvas, opts);
       } catch(e){ detections = []; }
 
-      if (detections.length > 0){
-        let best = null, bestD = Infinity;
-        detections.forEach(d => {
-          const b = d.box;
-          const ccx = b.x + b.width/2, ccy = b.y + b.height/2;
-          const dd = dist(ccx, ccy, curX, curY);
-          if (dd < bestD){ bestD = dd; best = b; }
-        });
+      // 予測位置から大きく離れた検出(=別人の顔など)は誤検出として無視する
+      const maxJump = Math.max(curW, curH) * 2.2 + canvas.width * 0.03;
+      let best = null, bestD = Infinity;
+      detections.forEach(d => {
+        const b = d.box;
+        const ccx = b.x + b.width/2, ccy = b.y + b.height/2;
+        const dd = dist(ccx, ccy, predX, predY);
+        if (dd < bestD && dd <= maxJump){ bestD = dd; best = b; }
+      });
+
+      if (best){
         missCount = 0;
         // 検出枠は顔の輪郭ぴったりになりがちなので、少し余裕を持たせる
         const padX = best.width * 0.18, padY = best.height * 0.28;
@@ -641,6 +655,8 @@
         ny = clamp(ny, 0, canvas.height - nh);
         curX = nx + nw/2; curY = ny + nh/2;
         curW = nw; curH = nh;
+        history.push({ x:curX, y:curY });
+        if (history.length > 2) history.shift();
 
         let kf = region.keyframes.find(k => Math.abs(k.t - t) <= 0.02);
         if (kf){ kf.x=nx; kf.y=ny; kf.w=nw; kf.h=nh; }
@@ -648,11 +664,20 @@
         statusEl.textContent = `顔を検出して追尾中… ${fmt(t)} / ${fmt(endT)}`;
       } else {
         missCount++;
-        statusEl.textContent = `顔が見つかりません… ${fmt(t)} / ${fmt(endT)}`;
         if (missCount >= MAX_MISS){
           lostAt = t;
           break;
         }
+        // 見失っている間は、直前の動きから予測した位置で補完しておく(遅れて追いつく違和感を防ぐ)
+        const nx = clamp(predX - curW/2, 0, canvas.width - curW);
+        const ny = clamp(predY - curH/2, 0, canvas.height - curH);
+        curX = nx + curW/2; curY = ny + curH/2;
+        history.push({ x:curX, y:curY });
+        if (history.length > 2) history.shift();
+        let kf = region.keyframes.find(k => Math.abs(k.t - t) <= 0.02);
+        if (kf){ kf.x=nx; kf.y=ny; kf.w=curW; kf.h=curH; }
+        else { region.keyframes.push({ t, x:nx, y:ny, w:curW, h:curH }); }
+        statusEl.textContent = `顔が見つからず予測で補完中… ${fmt(t)} / ${fmt(endT)}`;
       }
       t += stepInterval;
     }
